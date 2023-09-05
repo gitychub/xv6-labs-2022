@@ -1,0 +1,6 @@
+(1) usertrap()
+(2) 15; SYS_exec [kernel/syscall.h]
+(3) user mode [riscv/p.63/4.1.1]
+(4) lw	a3,0(zero); a3
+(5) no; yes (load page fault) [riscv/p.71/Table 4.2]
+(6) initcode\000\000\000\000\000\000\000; 1
