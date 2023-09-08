@@ -1,0 +1,1 @@
+[ugetpid] fstat and uptime; store the data they read in sysinfo
