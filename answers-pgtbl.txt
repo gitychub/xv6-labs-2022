@@ -1,1 +1,2 @@
 [ugetpid] fstat and uptime; store the data they read in sysinfo
+[pte printout] text page; guard page; yes; usyscall
