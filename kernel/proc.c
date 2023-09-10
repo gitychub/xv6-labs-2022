@@ -148,6 +148,13 @@ found:
 
   p->alarm_interval = 0;
   p->ticks_elapsed = 0;
+  // Allocate a alarm_trapframe page.
+  if((p->alarm_trapframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  p->sigreturned = 1;
 
   return p;
 }
@@ -174,6 +181,10 @@ freeproc(struct proc *p)
   p->state = UNUSED;
   p->alarm_interval = 0;
   p->ticks_elapsed = 0;
+  if(p->alarm_trapframe)
+    kfree((void*)p->alarm_trapframe);
+  p->alarm_trapframe = 0;
+  p->sigreturned = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
