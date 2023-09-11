@@ -343,6 +343,30 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+uint64 cow_handler(pagetable_t pagetable, uint64 va) {
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  uint64 pa = PTE2PA(*pte);
+
+  int flags = PTE_FLAGS(*pte) | PTE_W;
+  flags &= ~PTE_COW;
+  char *mem;
+  if((mem = kalloc()) == 0)
+    return 0;
+  memmove(mem, (char*)pa, PGSIZE);
+  uvmunmap(pagetable, va, 1, 1);
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem, flags) != 0){
+    kfree(mem);
+    return 0;
+  }
+  return (uint64)mem;
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -353,7 +377,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    pa0 = cow_handler(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
