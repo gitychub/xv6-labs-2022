@@ -66,7 +66,7 @@ usertrap(void)
 
     syscall();
   } else if (r_scause() == 0xf) {
-    if (cow_handler(p->pagetable, PGROUNDDOWN(r_stval())) == 0) {
+    if (cow_handler(p->pagetable, PGROUNDDOWN(r_stval()), 1) == 0) {
       setkilled(p);
     }
   } else if((which_dev = devintr()) != 0){

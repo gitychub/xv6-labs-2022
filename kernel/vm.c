@@ -343,7 +343,11 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
-uint64 cow_handler(pagetable_t pagetable, uint64 va) {
+uint64 cow_handler(pagetable_t pagetable, uint64 va, int page_fault) {
+  // same as walkaddr(pagetable, va), but we need pte later
+  if(va >= MAXVA)
+    return 0;
+
   pte_t *pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
@@ -352,6 +356,15 @@ uint64 cow_handler(pagetable_t pagetable, uint64 va) {
   if((*pte & PTE_U) == 0)
     return 0;
   uint64 pa = PTE2PA(*pte);
+
+  // in usertrap, we're already dealing with "Store/AMO page fault",
+  // so once we know the page is not cow, we kill the process;
+  // in copyout, the (physical) page we want to copy src to
+  // has yet to be determined, so we provide the appropriate page
+  // according to the cow bit
+  if((*pte & PTE_COW) == 0) {
+    return (page_fault) ? 0 : pa;
+  }
 
   int flags = PTE_FLAGS(*pte) | PTE_W;
   flags &= ~PTE_COW;
@@ -377,7 +390,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = cow_handler(pagetable, va0);
+    pa0 = cow_handler(pagetable, va0, 0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
