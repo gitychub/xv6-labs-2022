@@ -1,0 +1,10 @@
+Consider the case where `key1` and `key2` belong to the same bucket &table[i]
+(i.e. `key1` and `key2` are both congruent to i modulo NBUCKET) while neither
+exists in the table yet. If there are `thread1` and `thread2` trying to execute
+`insert(key1, value1, &table[i], table[i])` and
+`insert(key2, value2, &table[i], table[i])` in parallel, the linked list
+`&table[i]` will split into two. This is because both `thread1` and `thread2`
+will prepend the new entry `e1` and `e2` in front of the original head `table[i]`
+rather than in serial. Consequently, at least one later call to `get(key1)` and
+`get(key2)` will have a null return, as it will sit on a branch that can not be
+traced by the ultimate head `table[i]` of the ultimate linked list.
