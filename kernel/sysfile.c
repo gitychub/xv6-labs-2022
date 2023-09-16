@@ -16,6 +16,8 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define LOOP_DEPTH 10
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -301,6 +303,30 @@ create(char *path, short type, short major, short minor)
   return 0;
 }
 
+struct inode* follow_symlink(struct inode *ip, char *path) {
+  int depth = 0;
+  do {
+    if (++depth == LOOP_DEPTH) {
+      iunlockput(ip);
+      return 0;
+    }
+
+    // see exec() in exec.c;
+    if (readi(ip, 0, (uint64)path, 0, DIRSIZ) <= 0) {
+      iunlockput(ip);
+      return 0;
+    }
+    iunlockput(ip);
+
+    // see sys_open()
+    if ((ip = namei(path)) == 0) {
+      return 0;
+    }
+    ilock(ip);
+  } while (ip->type == T_SYMLINK);
+  return ip;
+}
+
 uint64
 sys_open(void)
 {
@@ -339,6 +365,13 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  if (ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+    if ((ip = follow_symlink(ip, path)) == 0) {
+      end_op();
+      return -1;
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -502,4 +535,24 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64 sys_symlink(void) {
+  // see sys_mkdir()
+  char target[MAXPATH], path[MAXPATH];
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  struct inode *ip;
+  if ((ip = create(path, T_SYMLINK, 0, 0)) == 0) {
+    end_op();
+    return -1;
+  }
+
+  // see sys_unlink()
+  int len = writei(ip, 0, (uint64)&target, 0, MAXPATH);
+  iunlockput(ip);
+  end_op();
+  return (len == MAXPATH) ? 0 : -1;
 }
