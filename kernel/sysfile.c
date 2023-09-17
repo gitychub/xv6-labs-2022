@@ -504,10 +504,98 @@ sys_pipe(void)
   return 0;
 }
 
-uint64 sys_mmap(void) {
-  return -1;
+uint64 sys_mmap() {
+  int prot, flag, length;
+  struct file *f;
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flag);
+  argfd(4, 0, &f);
+  if (length > f->ip->size) {
+    length = f->ip->size;
+  }
+  if ((prot & PROT_WRITE) && flag == MAP_SHARED && f->writable == 0) {
+    return 0xffffffffffffffff;
+  }
+  struct proc *p = myproc();
+  for (int i = 0; i < NOFILE; ++i) {
+    if (p->maprecord[i].file == 0) {
+      mappages(p->pagetable, p->maprecord[i].addr, length, 0, 0);
+      p->maprecord[i].file = f;
+      p->maprecord[i].flag = flag;
+      p->maprecord[i].length = length;
+      p->maprecord[i].prot = prot;
+      filedup(f);
+
+      return p->maprecord[i].addr;
+    }
+  }
+  return 0xffffffffffffffff;
 }
 
-uint64 sys_munmap(void) {
-  return -1;
+uint64 sys_munmap() {
+  uint64 addr;
+  int length;
+  argaddr(0, &addr);
+  argint(1, &length);
+  struct proc *p = myproc();
+  pte_t *pte;
+  for (int i = 0; i < NOFILE; ++i) {
+    if (p->maprecord[i].addr && addr >= p->maprecord[i].addr && addr < p->maprecord[i].addr + length) {
+      for (int a = 0; a < length; a += PGSIZE) {
+        pte = walk(p->pagetable, addr + a, 0);
+        if (pte == 0 || (*pte & PTE_V) == 0) {
+          if (pte != 0) {
+            *pte = 0;
+          }
+          continue;
+        }
+        // not mapped yet
+        if ((*pte & PTE_U) == 0) {
+          *pte = 0;
+          continue;
+        }
+        // write to the file
+        if (p->maprecord[i].flag == MAP_SHARED) {
+          int max = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
+          int cnt = 0, r;
+          while (cnt < length - a) {
+            int n1 = length - a - cnt;
+            if (n1 > max) {
+              n1 = max;
+            }
+
+            begin_op();
+            ilock(p->maprecord[i].file->ip);
+            r = writei(p->maprecord[i].file->ip, 1, addr + a + cnt, addr + a + cnt - p->maprecord[i].addr, n1);
+            iunlock(p->maprecord[i].file->ip);
+            end_op();
+
+            if (r != n1) {
+              return -1;
+            }
+            cnt += r;
+          }
+        }
+        // uvmunmap(p->pagetable, addr + a, 1, 1);
+        uint64 pa = PTE2PA(*pte);
+        kfree((void *)pa);
+        *pte = 0;
+      }
+      
+      int allunmaped = 1;
+      for (uint64 a = p->maprecord[i].addr; a < PGROUNDUP(p->maprecord[i].addr + p->maprecord[i].length); a += PGSIZE) {
+        pte = walk(p->pagetable, a, 0);
+        if (pte != 0 && (*pte & PTE_V)) {
+          allunmaped = 0;
+          break;
+        }
+      }
+      if (allunmaped) {
+        fileclose(p->maprecord[i].file);
+        p->maprecord[i].file = 0;
+      }
+    }
+  }
+  return 0;
 }

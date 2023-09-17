@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -146,6 +150,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  for (int i = 0; i < NOFILE; ++i) {
+    p->maprecord[i].file = 0;
+    p->maprecord[i].addr = MAXVA - (MAXMAPPAGE * (i + 1) + 2) * PGSIZE;
+  }
   return p;
 }
 
@@ -322,6 +330,19 @@ fork(void)
   np->state = RUNNABLE;
   release(&np->lock);
 
+  // 在 fork 函数中添加
+  for (i = 0; i < NOFILE; ++i) {
+    if (p->maprecord[i].file) {
+      np->maprecord[i].file = p->maprecord[i].file;
+      np->maprecord[i].addr = p->maprecord[i].addr;
+      np->maprecord[i].flag = p->maprecord[i].flag;
+      np->maprecord[i].length = p->maprecord[i].length;
+      np->maprecord[i].prot = p->maprecord[i].prot;
+      filedup(np->maprecord[i].file);
+      mappages(np->pagetable, np->maprecord[i].addr, np->maprecord[i].length, 0, 0);
+    }
+  }
+
   return pid;
 }
 
@@ -347,6 +368,7 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
+  pte_t *pte;
 
   if(p == initproc)
     panic("init exiting");
@@ -357,6 +379,53 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+
+    // unmap mmaped files
+    if (p->maprecord[fd].file) {
+      int length = p->maprecord[fd].length;
+      uint64 addr = p->maprecord[fd].addr;
+      for (int a = 0; a < length; a += PGSIZE) {
+        pte = walk(p->pagetable, addr + a, 0);
+        if (pte == 0 || (*pte & PTE_V) == 0) {
+          if (pte) {
+            *pte = 0;
+          }
+          continue;
+        }
+        // not mapped yet
+        if ((*pte & PTE_U) == 0) {
+          *pte = 0;
+          continue;
+        }
+        // write to the file
+        if (p->maprecord[fd].flag == MAP_SHARED) {
+          int max = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
+          int cnt = 0, r;
+          while (cnt < length - a) {
+            int n1 = length - a - cnt;
+            if (n1 > max) {
+              n1 = max;
+            }
+
+            begin_op();
+            ilock(p->maprecord[fd].file->ip);
+            r = writei(p->maprecord[fd].file->ip, 1, addr + a + cnt, a + cnt, n1);
+            iunlock(p->maprecord[fd].file->ip);
+            end_op();
+
+            if (r != n1) {
+              panic("exit write");
+            }
+            cnt += r;
+          }
+        }
+        uint64 pa = PTE2PA(*pte);
+        kfree((void *)pa);
+        *pte = 0;
+      }
+      fileclose(p->maprecord[fd].file);
+      p->maprecord[fd].file = 0;
     }
   }
 

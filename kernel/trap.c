@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -67,7 +71,45 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13) {
+    int mapflag = 0;
+    for (int i = 0; i < NOFILE; ++i) {
+      if (p->maprecord[i].file && p->maprecord[i].addr <= r_stval() && r_stval() < p->maprecord[i].addr + p->maprecord[i].length) {
+        char *mem = kalloc();
+        if (mem == 0) {
+          goto wrong;
+        }
+        uint64 a = PGROUNDDOWN(r_stval());
+        pte_t *pte;
+        if ((pte = walk(p->pagetable, a, 1)) == 0) {
+          kfree(mem);
+          goto wrong;
+        }
+        *pte = PA2PTE(mem) | PTE_V | PTE_U;
+        if (p->maprecord[i].prot & PROT_READ) {
+          *pte |= PTE_R;
+        }
+        if (p->maprecord[i].prot & PROT_WRITE) {
+          *pte |= PTE_W;
+        }
+        if (p->maprecord[i].prot & PROT_EXEC) {
+          *pte |= PTE_X;
+        }
+        ilock(p->maprecord[i].file->ip);
+        int readn = readi(p->maprecord[i].file->ip, 0, (uint64)mem, a - p->maprecord[i].addr, PGSIZE);
+        if (readn < PGSIZE) {
+          memset(mem + readn, 0, PGSIZE - readn);
+        }
+        iunlock(p->maprecord[i].file->ip);
+        mapflag = 1;
+        break;
+      }
+    }
+    if (mapflag == 0) {
+      goto wrong;
+    }
   } else {
+wrong:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);
