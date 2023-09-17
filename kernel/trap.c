@@ -33,6 +33,43 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+uint64 lazy_handler(pagetable_t pagetable, uint64 va) {
+  // same as walkaddr(pagetable, va), but we need pte later
+  if(va >= MAXVA)
+    return 0;
+
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  // uint64 pa = PTE2PA(*pte);
+
+  // in usertrap, we're already dealing with "Store/AMO page fault",
+  // so once we know the page is not cow, we kill the process;
+  // in copyout, the (physical) page we want to copy src to
+  // has yet to be determined, so we provide the appropriate page
+  // according to the cow bit
+  // if((*pte & PTE_COW) == 0) {
+  //   return (page_fault) ? 0 : pa;
+  // }
+
+  char *mem;
+  if((mem = kalloc()) == 0){
+    // uvmdealloc(pagetable, , oldsz);
+    return 0;
+  }
+  memset(mem, 0, PGSIZE);
+  if(mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_R|PTE_U|p->vma) != 0){
+    kfree(mem);
+    // uvmdealloc(pagetable, a, oldsz);
+    return 0;
+  }
+  return (uint64)mem;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -69,47 +106,13 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if (r_scause() == 0xd || r_scause() == 0xf) {
+    if (lazy_handler(p->pagetable, PGROUNDDOWN(r_stval())) == 0) {
+      setkilled(p);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if(r_scause() == 13) {
-    int mapflag = 0;
-    for (int i = 0; i < NOFILE; ++i) {
-      if (p->maprecord[i].file && p->maprecord[i].addr <= r_stval() && r_stval() < p->maprecord[i].addr + p->maprecord[i].length) {
-        char *mem = kalloc();
-        if (mem == 0) {
-          goto wrong;
-        }
-        uint64 a = PGROUNDDOWN(r_stval());
-        pte_t *pte;
-        if ((pte = walk(p->pagetable, a, 1)) == 0) {
-          kfree(mem);
-          goto wrong;
-        }
-        *pte = PA2PTE(mem) | PTE_V | PTE_U;
-        if (p->maprecord[i].prot & PROT_READ) {
-          *pte |= PTE_R;
-        }
-        if (p->maprecord[i].prot & PROT_WRITE) {
-          *pte |= PTE_W;
-        }
-        if (p->maprecord[i].prot & PROT_EXEC) {
-          *pte |= PTE_X;
-        }
-        ilock(p->maprecord[i].file->ip);
-        int readn = readi(p->maprecord[i].file->ip, 0, (uint64)mem, a - p->maprecord[i].addr, PGSIZE);
-        if (readn < PGSIZE) {
-          memset(mem + readn, 0, PGSIZE - readn);
-        }
-        iunlock(p->maprecord[i].file->ip);
-        mapflag = 1;
-        break;
-      }
-    }
-    if (mapflag == 0) {
-      goto wrong;
-    }
   } else {
-wrong:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);

@@ -81,16 +81,18 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
-struct mmaprec {
-  uint64 addr;      // the start virtual address to which the file was mapped to
-  int length;       // mapped length
+struct vma {
+  uint64 addr;
+  uint length;
   int prot;
   int flag;
-  struct file *file;  
+  struct file *file;
 };
 
+/********************/
 // 添加到 proc.h 中
 #define MAXMAPPAGE (268 * 1024 / PGSIZE) 
+/********************/
 
 // Per-process state
 struct proc {
@@ -115,6 +117,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  // 添加到 struct proc 中
-  struct mmaprec maprecord[NOFILE];
+  struct vma vma[VMASIZE];
 };

@@ -151,8 +151,8 @@ found:
   p->context.sp = p->kstack + PGSIZE;
 
   for (int i = 0; i < NOFILE; ++i) {
-    p->maprecord[i].file = 0;
-    p->maprecord[i].addr = MAXVA - (MAXMAPPAGE * (i + 1) + 2) * PGSIZE;
+    p->vma[i].file = 0;
+    p->vma[i].addr = MAXVA - (MAXMAPPAGE * (i + 1) + 2) * PGSIZE;
   }
   return p;
 }
@@ -332,14 +332,14 @@ fork(void)
 
   // 在 fork 函数中添加
   for (i = 0; i < NOFILE; ++i) {
-    if (p->maprecord[i].file) {
-      np->maprecord[i].file = p->maprecord[i].file;
-      np->maprecord[i].addr = p->maprecord[i].addr;
-      np->maprecord[i].flag = p->maprecord[i].flag;
-      np->maprecord[i].length = p->maprecord[i].length;
-      np->maprecord[i].prot = p->maprecord[i].prot;
-      filedup(np->maprecord[i].file);
-      mappages(np->pagetable, np->maprecord[i].addr, np->maprecord[i].length, 0, 0);
+    if (p->vma[i].file) {
+      np->vma[i].file = p->vma[i].file;
+      np->vma[i].addr = p->vma[i].addr;
+      np->vma[i].flag = p->vma[i].flag;
+      np->vma[i].length = p->vma[i].length;
+      np->vma[i].prot = p->vma[i].prot;
+      filedup(np->vma[i].file);
+      mappages(np->pagetable, np->vma[i].addr, np->vma[i].length, 0, 0);
     }
   }
 
@@ -382,9 +382,9 @@ exit(int status)
     }
 
     // unmap mmaped files
-    if (p->maprecord[fd].file) {
-      int length = p->maprecord[fd].length;
-      uint64 addr = p->maprecord[fd].addr;
+    if (p->vma[fd].file) {
+      int length = p->vma[fd].length;
+      uint64 addr = p->vma[fd].addr;
       for (int a = 0; a < length; a += PGSIZE) {
         pte = walk(p->pagetable, addr + a, 0);
         if (pte == 0 || (*pte & PTE_V) == 0) {
@@ -399,7 +399,7 @@ exit(int status)
           continue;
         }
         // write to the file
-        if (p->maprecord[fd].flag == MAP_SHARED) {
+        if (p->vma[fd].flag == MAP_SHARED) {
           int max = ((MAXOPBLOCKS - 1 - 1 - 2) / 2) * BSIZE;
           int cnt = 0, r;
           while (cnt < length - a) {
@@ -409,9 +409,9 @@ exit(int status)
             }
 
             begin_op();
-            ilock(p->maprecord[fd].file->ip);
-            r = writei(p->maprecord[fd].file->ip, 1, addr + a + cnt, a + cnt, n1);
-            iunlock(p->maprecord[fd].file->ip);
+            ilock(p->vma[fd].file->ip);
+            r = writei(p->vma[fd].file->ip, 1, addr + a + cnt, a + cnt, n1);
+            iunlock(p->vma[fd].file->ip);
             end_op();
 
             if (r != n1) {
@@ -424,8 +424,8 @@ exit(int status)
         kfree((void *)pa);
         *pte = 0;
       }
-      fileclose(p->maprecord[fd].file);
-      p->maprecord[fd].file = 0;
+      fileclose(p->vma[fd].file);
+      p->vma[fd].file = 0;
     }
   }
 
